@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>SimLab dApp</title>
+<style>
+body{font-family:system-ui;background:#0b0e12;color:#eee;margin:0;padding:16px}
+h1{font-size:20px}
+button{display:block;width:100%;padding:16px;margin:10px 0;font-size:17px;border:none;border-radius:12px;background:#4e44ce;color:#fff}
+button:disabled{opacity:.5}
+pre{white-space:pre-wrap;font-family:monospace;font-size:12px;margin-top:12px;background:#000;padding:10px;border-radius:8px;overflow:auto}
+.tip{color:#9aa;font-size:13px}
+</style>
+</head>
+<body>
+<h1>SimLab Scenario dApp</h1>
+<p class="tip">window.solana provider: <span id="pp">loading…</span></p>
+<button id="btn">1. Connect Wallet</button>
+<button id="btnRun" disabled>2. Build &amp; Sign Scenario Tx</button>
+<p class="tip">Last signature: <input id="sig" readonly style="width:100%;background:#000;color:#0f0;border:none"></p>
+<pre id="log">ready</pre>
+<script>
+function $(id){return document.getElementById(id);}
+function getQuery(){
+  var q=new URLSearchParams(location.search);
+  return {
+    prog: q.get('prog')||'8KjSSrK32WLZXNeQbSgWqBdtjy74wT7nqfvxrFnNsMAK',
+    len:  parseInt(q.get('len')||'512',10),
+    rpc:  q.get('rpc')||'http://10.0.2.2:8899'
+  };
+}
+var CFG=getQuery();
+var L=(function(){var l=document.getElementById('log');return function(m){l.textContent+='\n'+m;l.scrollTop=l.scrollHeight;};})();
+function provider(){return window.solana||(window.phantom&&window.phantom.solana)||null;}
+var P=null;
+function refresh(){
+  P=provider();
+  var pp=document.getElementById('pp');
+  if(P){ pp.textContent='present: '+((P.isPhantom)?'Phantom':'UNKNOWN')+(P.isConnected?' (connected)':''); }
+  else { pp.textContent='MISSING (no window.solana)'; }
+  var btn=document.getElementById('btn');
+  btn.disabled=!P;
+  L('provider = '+pp.textContent);
+  if(P&&!P.isConnected){
+    P.on('connect',function(){ L('onconnect fired'); document.getElementById('btnRun').disabled=false; });
+  }
+}
+function ensureWeb3(cb){
+  if(window.solanaWeb3){cb();return;}
+  L('loading web3.js …');
+  var s=document.createElement('script');
+  s.src='/web3.js';
+  s.onload=function(){ L('web3 loaded'); cb(); };
+  s.onerror=function(){ L('web3 ERR'); };
+  document.head.appendChild(s);
+}
+function onConnect(){
+  var p=provider(); if(!p){L('[[dialog-done]]');return;}
+  p.connect().then(function(resp){
+    L('connected pubkey='+resp.pubkey.toString()+' isPhantom='+p.isPhantom);
+    document.getElementById('btnRun').disabled=false;
+  }).catch(function(e){L('connect ERR: '+e.message);L('[[dialog-done]]');});
+}
+var running=false;
+function onRun(){
+  var p=provider(); if(!p)return;
+  ensureWeb3(function(){
+    var W=window.solanaWeb3; if(!W)return;
+    var conn=new W.Connection(CFG.rpc,'confirmed');
+    L('fetch recentBlockhash from '+CFG.rpc);
+    conn.getRecentBlockhash('confirmed').then(function(res){
+      var blockhash=res.blockhash;
+      var prog=new W.PublicKey(CFG.prog);
+      var feePayer=p.publicKey;
+      var tx=new W.Transaction({feePayer:feePayer, recentBlockhash:blockhash});
+      tx.add({keys:[
+        {pubkey:feePayer,isSigner:true,isWritable:true},
+        {pubkey:W.SystemProgram.programId,isSigner:false,isWritable:false}
+      ],programId:prog,
+        data:Uint8Array.from([1].concat(new Array(CFG.len).fill(0)))});
+      L('blockhash='+blockhash);
+      L('built data.len='+(1+CFG.len)+' prog='+CFG.prog);
+      L('signTransaction() via Phantom…');
+      return p.signTransaction(tx);
+    }).then(function(signed){
+      L('signed OK; serialize…');
+      var raw=signed.serialize();
+      L('raw bytes='+raw.length);
+      var bc=new W.Connection(CFG.rpc,'confirmed');
+      L('broadcast to '+CFG.rpc);
+      return bc.sendRawTransaction(raw);
+    }).then(function(sig){
+      L('SENT sig='+sig);
+      document.getElementById('sig').value=sig;
+      var cc=new W.Connection(CFG.rpc,'confirmed');
+      return cc.confirmTransaction(sig,'confirmed').then(function(conf){
+        L('CONFIRMED err='+((conf.value&&conf.value.err)||'ok'));
+      });
+    }).catch(function(e){ L('ERR: '+e); })
+      .finally(function(){ L('[[dialog-done]]'); running=false; });
+  });
+}
+function main(){
+  L('web3 '+(window.solanaWeb3?'preloaded':'pending'));
+  L('rpc='+CFG.rpc+' prog='+CFG.prog+' len='+CFG.len);
+  refresh();
+}
+document.addEventListener('DOMContentLoaded',function(){
+  document.getElementById('btn').addEventListener('click',onConnect);
+  document.getElementById('btnRun').addEventListener('click',onRun);
+  main();
+});
+setTimeout(main,1500);
+setTimeout(function(){ if(!P){ refresh(); } },4000);
+</script>
+</body>
+</html>
