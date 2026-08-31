@@ -19,6 +19,7 @@ mark{background:#553;color:#ff8}
 <p class="tip">provider: <span id="pp">loading…</span></p>
 <button id="btn">1. Connect Wallet</button>
 <button id="btnRun" disabled>2. Request Signature for X — then SWAP to B</button>
+<button id="btnBc" disabled>3. Broadcast signed tx (REQUIRES EXPLICIT APPROVAL)</button>
 <p class="tip">mode: <span id="md">…</span>  swap delay: <span id="sdt">…</span> ms</p>
 <p class="tip">Last signature: <input id="sig" readonly style="width:100%;background:#000;color:#0f0;border:none"></p>
 <pre id="log">ready</pre>
@@ -156,23 +157,43 @@ function onRun(){
           if(signed.feePayer){ L('feePayer='+String(signed.feePayer)); }
           if(signed.recentBlockhash){ L('recentBlockhash='+String(signed.recentBlockhash)); }
         } catch(e){ L('parse signed failed: '+e); }
-        L('serialize signed for broadcast…');
+        L('serialize signed…');
         var raw=signed.serialize();
         L('raw bytes='+raw.length);
-        var bc=new W.Connection(CFG.rpc,'confirmed');
-        return bc.sendRawTransaction(raw);
-      }).then(function(sig){
-        L('SENT sig='+sig);
-        document.getElementById('sig').value=sig;
-        var cc=new W.Connection(CFG.rpc,'confirmed');
-        return cc.confirmTransaction(sig,'confirmed').then(function(conf){
-          L('CONFIRMED err='+((conf.value&&conf.value.err)||'ok'));
-          L('[[SIG]] '+sig);
-        });
+        // GUARDRAIL (2026-08-31): NO auto-broadcast. The signed raw bytes are
+        // held in the page; an EXPLICIT human action (button 3) is required to
+        // complete the transaction. Nothing is sent to the chain on its own.
+        window.__signedRaw=raw;
+        window.__signedSig=null;
+        document.getElementById('btnBc').disabled=false;
+        L('SIGNED — NOT broadcast (guardrail). Awaiting explicit approval:');
+        L('  tap "3. Broadcast signed tx" to complete on '+CFG.rpc);
+        return null;
+      }).then(function(){
+        L('[[dialog-done]]'); running=false;
       });
     }).catch(function(e){ L('ERR: '+e); })
       .finally(function(){ L('[[dialog-done]]'); running=false; });
   });
+}
+// ---- GUARDRAIL: explicit approval to complete the tx ----
+function onBroadcast(){
+  var W=window.solanaWeb3; if(!W)return;
+  var raw=window.__signedRaw;
+  if(!raw){ L('nothing awaiting broadcast — sign first'); return; }
+  L('BROADCAST_APPROVED (explicit user action) -> '+CFG.rpc);
+  var bc=new W.Connection(CFG.rpc,'confirmed');
+  bc.sendRawTransaction(raw).then(function(sig){
+    L('SENT sig='+sig);
+    document.getElementById('sig').value=sig;
+    window.__signedSig=sig;
+    var cc=new W.Connection(CFG.rpc,'confirmed');
+    return cc.confirmTransaction(sig,'confirmed').then(function(conf){
+      L('CONFIRMED err='+((conf.value&&conf.value.err)||'ok'));
+      L('[[SIG]] '+sig);
+      L('[[dialog-done]]');
+    });
+  }).catch(function(e){ L('ERR: '+e); L('[[dialog-done]]'); });
 }
 function main(){
   L('web3 '+(window.solanaWeb3?'preloaded':'pending'));
@@ -184,6 +205,7 @@ function main(){
 document.addEventListener('DOMContentLoaded',function(){
   document.getElementById('btn').addEventListener('click',onConnect);
   document.getElementById('btnRun').addEventListener('click',onRun);
+  document.getElementById('btnBc').addEventListener('click',onBroadcast);
   main();
 });
 setTimeout(main,1500);
