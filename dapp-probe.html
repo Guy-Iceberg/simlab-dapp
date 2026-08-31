@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>cross-origin probe</title>
+<style>body{background:#111;color:#eee;font-family:monospace;padding:16px}pre{white-space:pre-wrap}</style>
+</head>
+<body>
+<h1>cross-origin fetch probe (github.io)</h1>
+<button onclick="run()">run probe</button>
+<pre id="out"></pre>
+<script>
+var OUT=document.getElementById('out');
+function log(m){OUT.textContent+='\n'+m;OUT.scrollTop=OUT.scrollHeight;}
+function probe(label,url,opts){
+  return fetch(url,opts||{}).then(function(r){
+    return r.text().then(function(t){
+      log(label+' OK status='+r.status+' len='+t.length+' acao='+(r.headers.get('access-control-allow-origin')||'null'));
+      log('  body='+t.slice(0,80));
+    });
+  }).catch(function(e){ log(label+' FAIL: '+e.message); });
+}
+function run(){
+  log('=== probe start origin='+location.origin);
+  var rpcBody=JSON.stringify({jsonrpc:'2.0',id:1,method:'getHealth'});
+  probe('POST tunnel-jsonrpc','https://null-flickr-environments-suited.trycloudflare.com/',{method:'POST',headers:{'Content-Type':'application/json'},body:rpcBody});
+  probe('GET tunnel-page','https://null-flickr-environments-suited.trycloudflare.com/dapp-swap.html');
+  probe('POST mainnet-solana','https://api.mainnet-beta.solana.com/',{method:'POST',headers:{'Content-Type':'application/json'},body:rpcBody});
+  probe('GET github-own','https://guy-iceberg.github.io/simlab-dapp/web3.js');
+}
+</script>
+</body>
+</html>
