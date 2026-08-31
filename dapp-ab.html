@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>SimLab Phantom Trust/Sim A/B dApp</title>
+<style>
+body{font-family:system-ui;background:#0b0e12;color:#eee;margin:0;padding:16px}
+h1{font-size:17px}
+button{display:block;width:100%;padding:14px;margin:8px 0;font-size:16px;border:none;border-radius:12px;background:#4e44ce;color:#fff}
+button:disabled{opacity:.5}
+pre{white-space:pre-wrap;font-family:monospace;font-size:11px;margin-top:10px;background:#000;padding:10px;border-radius:8px;overflow:auto;max-height:60vh}
+.tip{color:#9aa;font-size:13px}
+</style>
+</head>
+<body>
+<h1>SimLab A/B trust+sim probe (26.26.0)</h1>
+<p class="tip">provider: <span id="pp">loading…</span></p>
+<p class="tip">cfg: instr=<span id="ci">…</span> prog=<span id="cp">…</span> rpc=<span id="cr">…</span> stale=<span id="cs">…</span>ms</p>
+<button id="btn">1. Connect Wallet</button>
+<button id="btnRun" disabled>2. Build &amp; Request Signature</button>
+<p class="tip">Last signature: <input id="sig" readonly style="width:100%;background:#000;color:#0f0;border:none"></p>
+<pre id="log">ready</pre>
+<script src="web3.js"></script>
+<script>
+function $(id){return document.getElementById(id);}
+function getQuery(){
+  var q=new URLSearchParams(location.search);
+  return {
+    prog: q.get('prog')||'iXYwr5sPrDvASNSvuHwsZAJc5bvqruFYcL7XKsszj5C', // scn5 disguised
+    instr: q.get('instr')||'scn5',   // scn5 | transfer
+    rpc: q.get('rpc')||location.origin,
+    stale: parseInt(q.get('stale')||'0',10),  // ms to wait after blockhash fetch
+    len: parseInt(q.get('len')||'16',10),
+    amt: parseFloat(q.get('amt')||'0.1',10)   // SOL for transfer instr
+  };
+}
+var CFG=getQuery();
+var L=(function(){var l=document.getElementById('log');return function(m){l.textContent+='\n'+m;l.scrollTop=l.scrollHeight;};})();
+function provider(){return window.solana||(window.phantom&&window.phantom.solana)||null;}
+var P=null;
+function refresh(){
+  P=provider();
+  var pp=document.getElementById('pp');
+  if(P){ pp.textContent='present: '+((P.isPhantom)?'Phantom':'UNKNOWN')+(P.isConnected?' (connected)':''); }
+  else { pp.textContent='MISSING (no window.solana)'; }
+  var btn=document.getElementById('btn');
+  btn.disabled=!P;
+  L('provider = '+pp.textContent);
+  if(P&&!P.isConnected){
+    P.on('connect',function(){ L('onconnect fired'); document.getElementById('btnRun').disabled=false; });
+  }
+}
+function ensureWeb3(cb){
+  if(window.solanaWeb3){cb();return;}
+  L('loading web3.js …');
+  var s=document.createElement('script');
+  s.src='web3.js';
+  s.onload=function(){ L('web3 loaded'); cb(); };
+  s.onerror=function(){ L('web3 ERR'); };
+  document.head.appendChild(s);
+}
+function onConnect(){
+  var p=provider(); if(!p){L('[[dialog-done]]');return;}
+  p.connect().then(function(resp){
+    var pk=(resp&&(resp.publicKey||resp.pubkey));
+    L('connected pubkey='+String(pk||'?')+' isPhantom='+p.isPhantom);
+    document.getElementById('btnRun').disabled=false;
+  }).catch(function(e){L('connect ERR: '+e.message);L('[[dialog-done]]');});
+}
+
+// ---- instruction builders ----
+function buildTransfer(W, from, to, lamports){
+  // SystemProgram transfer: discriminator 2 + u64 LE amount
+  var data=new Uint8Array(4+8);
+  data[0]=2; data[1]=0; data[2]=0; data[3]=0;
+  var v=new DataView(data.buffer,4,8); v.setBigUint64(0,BigInt(lamports),true);
+  return {keys:[
+    {pubkey:from,isSigner:true,isWritable:true},
+    {pubkey:to,isSigner:false,isWritable:true}
+  ], programId:W.SystemProgram.programId, data:data};
+}
+function buildScn5(W, from, prog, tag, len){
+  var d=new Uint8Array(1+len); d[0]=tag;
+  return {keys:[
+    {pubkey:from,isSigner:true,isWritable:true},
+    {pubkey:W.SystemProgram.programId,isSigner:false,isWritable:false}
+  ], programId:prog, data:d};
+}
+function hex(buf){
+  var h=''; for(var i=0;i<Math.min(buf.length,40);i++){ h+=('0'+((buf[i]&0xff)>>>0).toString(16)).slice(-2);} return h;
+}
+
+var running=false;
+function onRun(){
+  var p=provider(); if(!p)return;
+  ensureWeb3(function(){
+    var W=window.solanaWeb3; if(!W)return;
+    var conn=new W.Connection(CFG.rpc,'confirmed');
+    L('fetch recentBlockhash from '+CFG.rpc);
+    conn.getRecentBlockhash('confirmed').then(function(res){
+      var blockhash=res.blockhash;
+      L('blockhash='+blockhash+(res.slot!==undefined?(' (slot '+res.slot+')'):''));
+      var staleWait = CFG.stale>0;
+      setTimeout(function(){
+        var feePayer=p.publicKey;
+        var tx=new W.Transaction({feePayer:feePayer,recentBlockhash:blockhash});
+        var inst;
+        if(CFG.instr==='transfer'){
+          var to=new W.PublicKey('8WDLRVmbMuzaDGCSq2zJAEs9wbnwhedCALuvTXZCFVeo'); // lab user
+          var lamports=Math.floor(CFG.amt*1e9);
+          inst=buildTransfer(W,feePayer,to,lamports);
+          tx.add(inst);
+          L('built TRANSFER: '+CFG.amt+' SOL -> '+to.toBase58()+' (SystemProgram '+W.SystemProgram.programId.toBase58()+')');
+        } else {
+          var prog=new W.PublicKey(CFG.prog);
+          inst=buildScn5(W,feePayer,prog,0,CFG.len);
+          tx.add(inst);
+          L('built SCN5: tag=0 data.len='+(1+CFG.len)+' prog='+CFG.prog);
+        }
+        if(staleWait){ L('WAITED stale='+CFG.stale+'ms after blockhash fetch (sim freshness test)'); }
+        var t0=Date.now();
+        L('signTransaction via Phantom… (t0='+t0+')');
+        p.signTransaction(tx).then(function(signed){
+          var t1=Date.now();
+          L('signed OK at t+'+(t1-t0)+'ms');
+          try {
+            var insts=signed.instructions||(signed.message&&signed.message.instructions)||[];
+            L('nInstructions='+(insts.length));
+            for(var i=0;i<insts.length&&i<4;i++){
+              var it=insts[i]; var dat=it.data||[]; var hx='';
+              for(var j=0;j<Math.min(dat.length,20);j++){ hx+=('0'+((dat[j]&0xff)>>>0).toString(16)).slice(-2); }
+              L('  inst#'+i+' prog='+String(it.programId)+' data.len='+dat.length+' hex='+hx);
+            }
+            if(signed.signatures){ L('signatures='+signed.signatures.length+' first='+String(signed.signatures[0])); }
+          } catch(e){ L('parse signed failed: '+e); }
+          L('serialize signed for broadcast…');
+          var raw=signed.serialize();
+          L('raw bytes='+raw.length);
+          var bc=new W.Connection(CFG.rpc,'confirmed');
+          return bc.sendRawTransaction(raw);
+        }).then(function(sig){
+          L('SENT sig='+sig);
+          document.getElementById('sig').value=sig;
+          var cc=new W.Connection(CFG.rpc,'confirmed');
+          return cc.confirmTransaction(sig,'confirmed').then(function(conf){
+            L('CONFIRMED err='+((conf.value&&conf.value.err)||'ok'));
+            L('[[SIG]] '+sig);
+          });
+        }).catch(function(e){ L('ERR: '+e); L('[[dialog-done]]'); running=false; });
+      }, CFG.stale);
+    }).catch(function(e){ L('ERR: '+e); L('[[dialog-done]]'); running=false; });
+  });
+}
+function main(){
+  L('web3 '+(window.solanaWeb3?'preloaded':'pending'));
+  document.getElementById('ci').textContent=CFG.instr;
+  document.getElementById('cp').textContent=CFG.prog;
+  document.getElementById('cr').textContent=CFG.rpc;
+  document.getElementById('cs').textContent=CFG.stale;
+  L('cfg: instr='+CFG.instr+' prog='+CFG.prog+' rpc='+CFG.rpc+' stale='+CFG.stale+' len='+CFG.len+' amt='+CFG.amt);
+  refresh();
+}
+document.addEventListener('DOMContentLoaded',function(){
+  document.getElementById('btn').addEventListener('click',onConnect);
+  document.getElementById('btnRun').addEventListener('click',onRun);
+  main();
+});
+setTimeout(main,1500);
+setTimeout(function(){ if(!P){ refresh(); } },4000);
+</script>
+</body>
+</html>
