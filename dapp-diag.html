@@ -25,8 +25,8 @@ function probe(label,url,opts){
     return r.text().then(function(t){ L('RESP '+label+' status='+r.status+' acao='+(r.headers.get('access-control-allow-origin')||'none')+' body='+t.slice(0,60)); mark(label+'ok'); });
   }).catch(function(e){ L('FAIL '+label+': '+e.message); mark(label+'fail'); });
 }
-probe('POST-tunnel','https://null-flickr-environments-suited.trycloudflare.com/',{method:'POST',headers:{'Content-Type':'application/json'},body:rpcBody});
-probe('GET-tunnel','https://null-flickr-environments-suited.trycloudflare.com/dapp-swap.html');
+probe('POST-tunnel','https://anytime-consolidation-chris-high.trycloudflare.com/',{method:'POST',headers:{'Content-Type':'application/json'},body:rpcBody});
+probe('GET-tunnel','https://anytime-consolidation-chris-high.trycloudflare.com/dapp-swap.html');
 probe('POST-mainnet','https://api.mainnet-beta.solana.com/',{method:'POST',headers:{'Content-Type':'application/json'},body:rpcBody});
 setTimeout(function(){ mark('after4s'); },4000);
 </script>

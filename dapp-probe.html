@@ -17,8 +17,8 @@ function probe(label,url,opts){
 }
 log('START');
 var rpcBody=JSON.stringify({jsonrpc:'2.0',id:1,method:'getHealth'});
-probe('POST-tunnel','https://null-flickr-environments-suited.trycloudflare.com/',{method:'POST',headers:{'Content-Type':'application/json'},body:rpcBody});
-probe('GET-tunnel','https://null-flickr-environments-suited.trycloudflare.com/dapp-swap.html');
+probe('POST-tunnel','https://anytime-consolidation-chris-high.trycloudflare.com/',{method:'POST',headers:{'Content-Type':'application/json'},body:rpcBody});
+probe('GET-tunnel','https://anytime-consolidation-chris-high.trycloudflare.com/dapp-swap.html');
 probe('POST-mainnet','https://api.mainnet-beta.solana.com/',{method:'POST',headers:{'Content-Type':'application/json'},body:rpcBody});
 probe('GET-own','https://guy-iceberg.github.io/simlab-dapp/web3.js');
 run=null;
