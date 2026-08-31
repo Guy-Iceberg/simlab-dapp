@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimLab diag</title>
+<style>body{font-family:system-ui;background:#0b0e12;color:#eee;margin:0;padding:16px}
+h1{font-size:17px}pre{white-space:pre-wrap;font-family:monospace;font-size:11px;margin-top:10px;background:#000;padding:10px;border-radius:8px;overflow:auto;max-height:70vh}</style>
+</head>
+<body>
+<h1>SimLab CORS/RPC diag — origin marker: <span id=om>…</span></h1>
+<pre id=log>ready</pre>
+<script src="web3.js"></script>
+<script>
+var L=(function(){var l=document.getElementById('log');return function(m){l.textContent+='\n'+m;l.scrollTop=l.scrollHeight;};})();
+function hexc(){var c=document.body.style.background; }
+L('DIAG origin='+location.origin+' href='+location.href.slice(0,120));
+document.getElementById('om').textContent=location.origin;
+// pixel marker: set body bg color per stage so screenshots prove JS ran
+var stage=0;
+function mark(tag){ stage++; var colors=['#002200','#003300','#004400','#111166','#222277','#333388','#550022','#660033','#770044']; document.body.style.background=colors[stage%colors.length]; L('MARK '+tag+' stage='+stage+' bodybg='+document.body.style.background); }
+mark('loaded');
+var rpcBody=JSON.stringify({jsonrpc:'2.0',id:1,method:'getHealth'});
+function probe(label,url,opts){
+  L('PROBE '+label+' -> '+url);
+  fetch(url,opts||{}).then(function(r){
+    return r.text().then(function(t){ L('RESP '+label+' status='+r.status+' acao='+(r.headers.get('access-control-allow-origin')||'none')+' body='+t.slice(0,60)); mark(label+'ok'); });
+  }).catch(function(e){ L('FAIL '+label+': '+e.message); mark(label+'fail'); });
+}
+probe('POST-tunnel','https://null-flickr-environments-suited.trycloudflare.com/',{method:'POST',headers:{'Content-Type':'application/json'},body:rpcBody});
+probe('GET-tunnel','https://null-flickr-environments-suited.trycloudflare.com/dapp-swap.html');
+probe('POST-mainnet','https://api.mainnet-beta.solana.com/',{method:'POST',headers:{'Content-Type':'application/json'},body:rpcBody});
+setTimeout(function(){ mark('after4s'); },4000);
+</script>
+</body>
+</html>
